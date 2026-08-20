@@ -1,0 +1,45 @@
+﻿const { sessionExists } = require('./lib/session.js');
+const { pairDevice } = require('./lib/pairing.js');
+const { startBot, onMessages } = require('./lib/hamatrix.js');
+const hamatrixHandler = require('./hamatrixHandler.js');
+const { startWebServer } = require('./web.js');
+
+async function main() {
+  console.clear();
+  console.log('🤖 Hamatrix WhatsApp Bot\n');
+
+  let sock;
+  if (!sessionExists()) {
+    console.log('No paired device found. Starting pairing...\n');
+    sock = await pairDevice();
+  } else {
+    console.log('Session found. Starting bot...\n');
+    sock = await startBot();
+  }
+
+  hamatrixHandler.enhanceSock(sock);
+
+  onMessages(sock, async ({ msg }) => {
+    await hamatrixHandler.handleMessage(sock, msg);
+  });
+
+  // Start web dashboard and send link to owner
+  try {
+    const { port, password } = startWebServer(sock);
+    const publicIp = 'localhost'; // Replace with your public IP or use a tunnel
+    const dashboardUrl = `http://${publicIp}:${port}?key=${password}`;
+    const ownerJid = require('./config.js').OWNER_JID || '256795312914@s.whatsapp.net';
+    await sock.sendMessage(ownerJid, {
+      text: `🌐 *HAMATRIX DASHBOARD*\n\n🔗 Link: ${dashboardUrl}\n🔑 Password: ${password}\n\n_Keep this safe._`
+    });
+  } catch (e) {
+    console.error('Dashboard error:', e.message);
+  }
+
+  console.log('✅ Bot is ready. Send *menu* or *.menu* in WhatsApp.\n');
+}
+
+main().catch(err => {
+  console.error('❌ Fatal error:', err.message);
+  process.exit(1);
+});

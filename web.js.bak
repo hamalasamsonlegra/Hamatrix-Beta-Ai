@@ -1,0 +1,145 @@
+const express = require('express');
+const path = require('path');
+const crypto = require('crypto');
+
+let app = null;
+let server = null;
+let dashboardPassword = null;
+let dashboardPort = 0;
+let ownerJid = null;
+let sock = null;
+
+// Simple server-side session store
+const sessions = new Map(); // token -> true
+
+function generatePassword() {
+  return crypto.randomBytes(4).toString('hex'); // 8 chars
+}
+
+function generateToken() {
+  return crypto.randomBytes(16).toString('hex'); // 32 chars
+}
+
+function getCookie(req, name) {
+  const header = req.headers.cookie || '';
+  const parts = header.split(';');
+  for (const part of parts) {
+    const [key, val] = part.trim().split('=');
+    if (key === name) return decodeURIComponent(val);
+  }
+  return null;
+}
+
+function setSessionCookie(res, token) {
+  res.setHeader('Set-Cookie', `hamatrix_session=${token}; HttpOnly; Path=/`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', 'hamatrix_session=; HttpOnly; Path=/; Max-Age=0');
+}
+
+function isAuthenticated(req) {
+  const token = getCookie(req, 'hamatrix_session');
+  return token && sessions.has(token);
+}
+
+function startWebServer(socket, owner) {
+  if (server) return { port: dashboardPort, password: dashboardPassword };
+
+  sock = socket;
+  ownerJid = owner || null;
+  dashboardPassword = generatePassword();
+  global.dashboardPassword = dashboardPassword;
+
+  dashboardPort = process.env.PORT || 3000 + Math.floor(Math.random() * 1000);
+
+  app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', path.join(__dirname, 'views'));
+  app.use(express.urlencoded({ extended: true }));
+
+  // Login page
+  app.get('/login', (req, res) => {
+    if (isAuthenticated(req)) return res.redirect('/');
+    res.render('login', { error: null, message: req.query.msg || null });
+  });
+
+  // Login action
+  app.post('/login', (req, res) => {
+    const { password } = req.body;
+    if (password === dashboardPassword) {
+      const token = generateToken();
+      sessions.set(token, true);
+      setSessionCookie(res, token);
+      return res.redirect('/');
+    }
+    res.render('login', { error: 'Invalid password', message: null });
+  });
+
+  // Logout
+  app.get('/logout', (req, res) => {
+    const token = getCookie(req, 'hamatrix_session');
+    if (token) sessions.delete(token);
+    clearSessionCookie(res);
+    res.redirect('/login');
+  });
+
+  // Dashboard (protected)
+  app.get('/', (req, res) => {
+    if (!isAuthenticated(req)) return res.redirect('/login');
+
+    const info = {
+      botName: 'HAMATRIX AI',
+      status: 'Online',
+      user: sock?.user?.name || sock?.user?.pushName || 'WhatsApp User',
+      platform: sock?.user?.platform || 'Web',
+      uptime: Math.floor(process.uptime()),
+      commands: global.commandCount || 'N/A',
+      memory: (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1) + ' MB',
+      time: new Date().toLocaleString(),
+    };
+    res.render('dashboard', { info });
+  });
+
+  // Change password (protected)
+  app.post('/change-password', (req, res) => {
+    if (!isAuthenticated(req)) return res.redirect('/login');
+
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 4) {
+      return res.redirect('/?msg=' + encodeURIComponent('Password too short (min 4 chars)'));
+    }
+
+    dashboardPassword = newPassword;
+
+    // Invalidate all existing sessions
+    sessions.clear();
+    clearSessionCookie(res);
+
+    // Send new password to owner via WhatsApp
+    if (sock && ownerJid) {
+      sock.sendMessage(ownerJid, {
+        text: `?? *HAMATRIX DASHBOARD PASSWORD UPDATED*\n\n?? New Password: ${newPassword}\n\n_Use it to log in._`
+      }).catch(() => {});
+    }
+
+    res.redirect('/login?msg=' + encodeURIComponent('Password updated. Please log in again.'));
+  });
+
+  server = app.listen(dashboardPort, '0.0.0.0', () => {
+    console.log(`?? Dashboard running at http://localhost:${dashboardPort}?key=${dashboardPassword}`);
+  });
+
+  return { port: dashboardPort, password: dashboardPassword };
+}
+
+function stopWebServer() {
+  if (server) {
+    server.close();
+    server = null;
+    app = null;
+    sessions.clear();
+  }
+}
+
+module.exports = { startWebServer, stopWebServer };

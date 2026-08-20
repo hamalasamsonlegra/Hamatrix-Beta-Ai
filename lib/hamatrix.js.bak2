@@ -1,0 +1,88 @@
+const makeWASocket = require('@whiskeysockets/baileys').default;
+const {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  Browsers
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const { SESSION_DIR } = require('../config.js');
+const { deleteSession } = require('./session.js');
+
+const logger = pino({ level: 'silent' });
+
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger)
+    },
+    logger,
+    browser: Browsers.macOS('Safari'),
+    printQRInTerminal: false,
+    markOnlineOnConnect: false,
+    syncFullHistory: false,
+    generateHighQualityLinkPreview: false,
+    keepAliveIntervalMs: 25000,
+    retryRequestDelayMs: 1500,
+    connectTimeoutMs: 120000,
+    defaultQueryTimeoutMs: 20000
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect } = update;
+
+    if (connection === 'close') {
+      const statusCode = lastDisconnect?.error?.output?.statusCode || 500;
+      if (statusCode === DisconnectReason.loggedOut) {
+        console.log('❌ Session logged out. Deleting session...');
+        deleteSession();
+        console.log('🔄 Restart the bot to pair again.');
+        setTimeout(() => process.exit(0), 2000);
+      } else if (statusCode === 515) {
+        console.log('🔄 Connection restart required (515). Reconnecting in 2s...');
+        setTimeout(() => startBot(), 2000);
+      } else {
+        const delay = 3000 + Math.floor(Math.random() * 6000);
+        console.log(`🔄 Connection lost (code ${statusCode}). Reconnecting in ${Math.round(delay / 1000)}s...`);
+        setTimeout(() => startBot(), delay);
+      }
+    } else if (connection === 'open') {
+      console.log('✅ Bot connected.\n');
+    }
+  });
+
+  return sock;
+}
+
+async function sendText(sock, jid, text) {
+  return sock.sendMessage(jid, { text });
+}
+
+function onMessages(sock, handler) {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    const msg = messages[0];
+    if (!msg.message || msg.key.fromMe) return;
+    if (msg.key.remoteJid === 'status@broadcast') return;
+
+    let text = '';
+    if (msg.message.conversation) text = msg.message.conversation;
+    else if (msg.message.extendedTextMessage?.text) text = msg.message.extendedTextMessage.text;
+    else if (msg.message.imageCaption) text = msg.message.imageCaption;
+    else if (msg.message.videoMessage?.caption) text = msg.message.videoMessage.caption;
+
+    if (text) {
+      await handler({ sock, msg, text, jid: msg.key.remoteJid });
+    }
+  });
+}
+
+module.exports = { startBot, sendText, onMessages };

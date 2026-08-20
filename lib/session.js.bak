@@ -1,0 +1,16 @@
+import fs from 'fs';
+import path from 'path';
+import { SESSION_DIR } from '../config.js';
+
+export function sessionExists() {
+  return fs.existsSync(path.join(SESSION_DIR, 'creds.json'));
+}
+
+export function deleteSession() {
+  try {
+    if (fs.existsSync(SESSION_DIR)) fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}

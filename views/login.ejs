@@ -1,0 +1,29 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - HAMATRIX</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f0f0f; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+    .login-card { background: #1a1a1a; padding: 40px; border-radius: 16px; width: 90%; max-width: 400px; box-shadow: 0 0 30px rgba(0,255,255,0.2); }
+    h2 { text-align: center; color: #00ffff; }
+    input[type="password"] { width: 100%; padding: 12px; margin: 20px 0; background: #222; border: 1px solid #333; color: #fff; border-radius: 8px; }
+    button { width: 100%; padding: 12px; background: #00cccc; border: none; color: #000; font-weight: bold; border-radius: 8px; cursor: pointer; }
+    button:hover { background: #00aaaa; }
+    .error { color: #ff5555; text-align: center; }
+    .msg { color: #55ff55; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <h2>🔐 HAMATRIX</h2>
+    <% if (error) { %><p class="error"><%= error %></p><% } %>
+    <% if (message) { %><p class="msg"><%= message %></p><% } %>
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Enter password" required>
+      <button type="submit">Login</button>
+    </form>
+  </div>
+</body>
+</html>

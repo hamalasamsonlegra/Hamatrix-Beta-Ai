@@ -1,0 +1,29 @@
+import { sendText, onMessages } from './hamatrix.js';
+
+const mainMenu = `*🤖 HAMATRIX MENU*
+1. AI Chat
+2. Image Generation
+3. Support
+4. About
+
+Reply with a number to select.`;
+
+export function setupHandler(sock) {
+  onMessages(sock, async ({ sock, text, jid }) => {
+    const msg = text.trim().toLowerCase();
+
+    if (msg === 'menu' || msg === '.menu' || msg === 'hi' || msg === 'hello') {
+      await sendText(sock, jid, mainMenu);
+    } else if (msg === '1') {
+      await sendText(sock, jid, '🤖 AI Chat selected. Send me your query.');
+    } else if (msg === '2') {
+      await sendText(sock, jid, '🖼️ Image Generation selected. Describe the image.');
+    } else if (msg === '3') {
+      await sendText(sock, jid, '📞 Support: Contact +256795312914');
+    } else if (msg === '4') {
+      await sendText(sock, jid, 'ℹ️ Hamatrix is an AI-powered WhatsApp bot.');
+    } else {
+      await sendText(sock, jid, '👋 Type *menu* to see options.');
+    }
+  });
+}

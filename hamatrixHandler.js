@@ -1,0 +1,187 @@
+﻿const fs = require('fs');
+const path = require('path');
+
+const commands = new Map();
+
+// Load all commands
+const commandFiles = fs.readdirSync(path.join(__dirname, 'Hamatrix')).filter(f => f.endsWith('.js'));
+console.log('ðŸ“¦ Loaded commands:', commandFiles.map(f => f.replace('.js','')).join(', '));
+
+for (const file of commandFiles) {
+    const cmd = require(`./Hamatrix/${file}`);
+    commands.set(cmd.name, cmd);
+}
+
+// Initialize global command states (used by dashboard toggles)
+global.commandList = Array.from(commands.keys());
+global.commandStates = {};
+global.commandList.forEach(cmdName => {
+    global.commandStates[cmdName] = true;
+});
+
+// â”€â”€â”€ Premium users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const premiumPath = path.join(__dirname, 'data', 'premium.json');
+let premiumUsers = [];
+try {
+    premiumUsers = JSON.parse(fs.readFileSync(premiumPath, 'utf8'));
+} catch { premiumUsers = []; }
+
+function isPremium(jid) {
+    return premiumUsers.includes(jid);
+}
+
+// â”€â”€â”€ Reaction mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const reactionMap = {
+    ping: 'ðŸ“', menu: 'ðŸ“‹', info: 'â„¹ï¸', uptime: 'â±ï¸', alive: 'âœ…',
+    owner: 'ðŸ‘¤', repo: 'ðŸ“‚', hug: 'ðŸ¤—', kiss: 'ðŸ˜˜', slap: 'ðŸ‘‹',
+    joke: 'ðŸ˜†', quote: 'ðŸ’¬', fact: 'ðŸ”', help: 'ðŸ“œ', carousel: 'ðŸŽ ', list: 'ðŸ“ƒ'
+};
+
+// â”€â”€â”€ Cooldown & rate limiting (antiâ€‘ban) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const cooldowns = new Map();
+const dailyUsage = new Map();
+const chatMsgTimes = new Map();
+const COOLDOWN_MS = 5000;
+const DAILY_LIMIT = 200;
+const CHAT_MSG_LIMIT = 5;
+const CHAT_WINDOW_MS = 10000;
+
+function now() { return Date.now(); }
+
+function isRateLimited(jid) {
+    const last = cooldowns.get(jid) || 0;
+    if (now() - last < COOLDOWN_MS) return true;
+    cooldowns.set(jid, now());
+    const today = new Date().toDateString();
+    let usage = dailyUsage.get(jid);
+    if (!usage || usage.date !== today) {
+        usage = { count: 0, date: today };
+        dailyUsage.set(jid, usage);
+    }
+    if (usage.count >= DAILY_LIMIT) return true;
+    usage.count++;
+    return false;
+}
+
+function isChatRateLimited(chatId) {
+    const times = chatMsgTimes.get(chatId) || [];
+    const recent = times.filter(t => now() - t < CHAT_WINDOW_MS);
+    if (recent.length >= CHAT_MSG_LIMIT) return true;
+    recent.push(now());
+    chatMsgTimes.set(chatId, recent);
+    return false;
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// â”€â”€â”€ Fancy text wrapper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function fancyText(text) {
+    const divider = 'â•°â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â•¯';
+    return `â•­â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â•®\n${text}\n${divider}\n\nÂ© Êœá´€á´á´€á´›Ê€Éªx Ê™á´‡á´›á´€ á´€Éª`;
+}
+
+// â”€â”€â”€ Enhance socket with premium behavior â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function enhanceSock(sock) {
+    const originalSend = sock.sendMessage.bind(sock);
+  sock._originalSend = originalSend;
+    sock.sendMessage = async function(jid, content, options = {}) {
+        // ðŸš€ If skipTyping flag is set, send immediately without typing/fancy
+        if (global.skipTyping) {
+            const result = await originalSend(jid, content, options);
+        if (global.sentMessageIds) global.sentMessageIds.add(result?.key?.id);
+        return result;
+        }
+
+        // Show typing for actual messages
+        try {
+            await sock.sendPresenceUpdate('composing', jid);
+            await sleep(800 + Math.random() * 700);
+            await sock.sendPresenceUpdate('paused', jid);
+        } catch {}
+
+        // Add premium badge and fancy formatting for plain text
+        if (content && typeof content === 'object' && content.text) {
+            const senderJid = jid.endsWith('@g.us') ? (options?.quoted?.participant || jid) : jid;
+            const badge = isPremium(senderJid) ? 'ðŸ’Ž á´˜Ê€á´‡á´Éªá´œá´\n' : '';
+            content.text = badge + fancyText(content.text);
+        }
+
+        const result = await originalSend(jid, content, options);
+        if (global.sentMessageIds) global.sentMessageIds.add(result?.key?.id);
+        return result;
+    };
+}
+
+async function handleMessage(sock, msg) {
+    // Button responses
+    const buttonMsg = msg.message?.buttonsResponseMessage;
+    if (buttonMsg) {
+        const buttonId = buttonMsg.selectedButtonId;
+        const jid = msg.key.remoteJid;
+        console.log('Button clicked:', buttonId);
+        if (buttonId === 'ping') {
+            await sock.sendMessage(jid, { text: 'ðŸ“ Pong!' });
+        } else if (buttonId === 'repo') {
+            await sock.sendMessage(jid, { text: 'ðŸ“‚ https://github.com/hamalasamsonlegra/Hamatrix-Beta-Ai' });
+        } else if (buttonId === 'owner') {
+            const vcard = 'BEGIN:VCARD\nVERSION:3.0\nFN:Hamatrix Owner\nTEL;waid=256795312914:+256 748 800194\nEND:VCARD';
+            await sock.sendMessage(jid, { contacts: { displayName: 'Hamatrix Owner', contacts: [{ vcard }] } });
+        }
+        if (commands.has(buttonId)) {
+            try { await commands.get(buttonId).execute(sock, msg, []); } catch(e) {}
+        }
+        return;
+    }
+
+    // Extract text
+    let text = '';
+    if (msg.message?.conversation) text = msg.message.conversation;
+    else if (msg.message?.extendedTextMessage?.text) text = msg.message.extendedTextMessage.text;
+    else if (msg.message?.imageMessage?.caption) text = msg.message.imageMessage.caption;
+    else if (msg.message?.videoMessage?.caption) text = msg.message.videoMessage.caption;
+
+    if (!text) return;
+    console.log(`ðŸ“© Message: "${text}"`);
+
+    const prefix = global.prefix || '.';
+    if (!text.startsWith(prefix)) return;
+
+    const args = text.slice(prefix.length).trim().split(/ +/);
+    const commandName = args.shift().toLowerCase();
+
+    if (!commands.has(commandName)) return;
+
+if (global.commandStates && global.commandStates[commandName] === false) {
+    await sock.sendMessage(msg.key.remoteJid, { text: '❌ This command is disabled.' }, { quoted: msg });
+    return;
+}
+
+    const senderJid = msg.key.participant || msg.key.remoteJid;
+
+    if (isRateLimited(senderJid)) {
+        await sock.sendMessage(msg.key.remoteJid, { text: 'â³ Please wait a few seconds before using another command.' }, { quoted: msg });
+        return;
+    }
+    if (isChatRateLimited(msg.key.remoteJid)) return;
+
+    await sleep(200 + Math.random() * 300);
+
+    const emoji = reactionMap[commandName] || ['âš¡','â¤ï¸','ðŸ”¥','ðŸ‘','ðŸŽ‰','ðŸ’¡','â­','ðŸš€','ðŸ’¯','ðŸ¤–','âœ¨'][Math.floor(Math.random() * 11)];
+    try {
+        await sock.sendMessage(msg.key.remoteJid, { react: { text: emoji, key: msg.key } });
+    } catch {}
+
+    try {
+        await commands.get(commandName).execute(sock, msg, args);
+        console.log(`âœ… Command executed: .${commandName}`);
+    } catch (error) {
+        console.error(`âŒ Error:`, error);
+        await sock.sendMessage(msg.key.remoteJid, { text: 'âŒ Error running command.' }, { quoted: msg });
+    }
+}
+
+module.exports = { handleMessage, commands, enhanceSock };
+
+

@@ -1,0 +1,6 @@
+const path = require('path');
+
+module.exports = {
+  SESSION_DIR: path.join(process.cwd(), 'hamatrix-session'),
+  BROWSER_NAME: 'hamatrix'
+};
